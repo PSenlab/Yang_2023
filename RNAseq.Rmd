@@ -1,0 +1,387 @@
+***
+# Introduction
+**Scripts used to process and analyze RNA-seq data; Yang et al**
+
+## Packages
+### Linux packages
+```{bash}
+fastqc/0.11.9
+java/12.0.1
+trimmomatic/0.39
+STAR/2.7.5b
+picard/2.20.8
+samtools/1.10
+deeptools/3.5.0
+```
+
+### R packages
+```{r}
+library(Rsubread) #/2.6.4
+library(gtools) #/3.9.2
+library(DESeq2) #/1.30.1
+library(ImpulseDE2) #/0.99.10
+library(openxlsx) #/4.2.4
+library(ggplot2) #/3.3.5
+library(dplyr) #/1.0.7
+library(ComplexHeatmap) #/2.6.2
+library(tidyverse) #/1.3.1
+```
+
+## Sample names
+```{bash}
+sample='O-1-120 O-1-240 O-1-48 O-1-72 O-1-96 O-1-bef O-2-120 O-2-240 O-2-48 
+O-2-72 O-2-96 O-2-bef O-3-120 O-3-240 O-3-48 O-3-72 O-3-96 O-3-bef Y-1-120 
+Y-1-240 Y-1-48 Y-1-72	Y-1-96 Y-1-bef Y-2-120 Y-2-240 Y-2-48 Y-2-72 Y-2-96 
+Y-2-bef Y-3-120 Y-3-240 Y-3-48 Y-3-72 Y-3-96 Y-3-bef'
+```
+
+## Project path
+```{bash}
+path="/path"
+```
+
+
+# Data pre-processing
+## Adapter trimming
+```{bash}
+for i in $sample
+do
+#run1
+  java -jar $TRIMMOJAR PE -threads 24 -phred33 ${path}/${i}_R1_001.fastq.gz \
+  ${path}/${i}_R2_001.fastq.gz ${path}/${i}_trimmed_run1_R1_paired.fq.gz \
+  ${path}/${i}_trimmed_run1_R1_unpaired.fq.gz ${path}/${i}_trimmed_run1_R2_paired.fq.gz \
+  ${path}/${i}_trimmed_run1_R2_unpaired.fq.gz \
+  ILLUMINACLIP:${path}/TruSeq_and_nextera_adapters.fa:3:50:10 LEADING:10 \
+  TRAILING:10 SLIDINGWINDOW:4:20 MAXINFO:50:0.8 MINLEN:25
+#run2
+  java -jar $TRIMMOJAR PE -threads 24 -phred33 ${path}/${i}_R1_001.fastq.gz \
+  ${path}/${i}_R2_001.fastq.gz ${path}/${i}_trimmed_run2_R1_paired.fq.gz \
+  ${path}/${i}_trimmed_run2_R1_unpaired.fq.gz ${path}/${i}_trimmed_run2_R2_paired.fq.gz \
+  ${path}/${i}_trimmed_run2_R2_unpaired.fq.gz \
+  ILLUMINACLIP:${path}/TruSeq_and_nextera_adapters.fa:3:50:10 LEADING:10 \
+  TRAILING:10 SLIDINGWINDOW:4:20 MAXINFO:50:0.8 MINLEN:25
+#remove unpaired FastQs
+  rm ${path}/*_unpaired.fq.gz
+done
+```
+
+## Performing FastQC on adapter trimmed FastQs
+```{bash}
+for i in $sample
+do
+  fastqc -o ${path} -t 12 --noextract \
+  -f fastq ${path}/${i}_trimmed_run?_R?_paired.fq.gz
+done
+```
+
+
+# Genome alignment 
+```{bash}
+#mm10 Fasta was obtained from "https://hgdownload.soe.ucsc.edu/goldenPath/mm10/chromosomes/"
+#mm10 Fasta files for chr1-19,x,y were obtained and concatenated with the ERCC fasta file to create mm10_ERCC_ref.fa
+#mm10 GTF file (ENSEMBL) was obtained from "https://hgdownload.soe.ucsc.edu/goldenPath/mm10/bigZips/genes/mm10.ensGene.gtf.gz"
+#mm10 GTF file was concatenated with ERCC GTF file
+
+#Alignment using STAR
+#calculate indexes using genomeGenerate (mm10)
+STAR --runMode genomeGenerate --genomeDir ${path} --genomeFastaFiles ${path}/mm10_ERCC_ref.fa 
+
+#Run 1
+for i in $sample
+do
+   STAR --genomeDir ${path} \
+   --readFilesIn ${path}/${i}_trimmed_run1_R1_paired.fq.gz \
+   ${path}/fastq/adapt_trim/${i}_trimmed_run1_R2_paired.fq.gz \
+   --readFilesCommand zcat --outTmpDir ${path}/${i}_STAR --outSAMunmapped Within \
+   --outFilterType BySJout --outFilterMultimapNmax 20 --outFilterMismatchNmax 999 \
+   --outFilterMismatchNoverLmax 0.04 --alignIntronMin 20 --alignIntronMax 1000000 \
+   --alignMatesGapMax 1000000 --alignSJoverhangMin 8 --alignSJDBoverhangMin 1 --sjdbScore 1 \
+   --outSAMtype BAM Unsorted --quantMode TranscriptomeSAM \
+   --sjdbGTFfile ${path}/mm10_ERCC_ref.gtf --sjdbGTFfeatureExon exon \
+   --outFileNamePrefix ${path}/${i}_run1_
+done
+
+#Run2
+for i in $sample
+do
+   STAR --genomeDir ${path} \
+   --readFilesIn ${path}/${i}_trimmed_run2_R1_paired.fq.gz \
+   ${path}/${i}_trimmed_run2_R2_paired.fq.gz \
+   --readFilesCommand zcat --outTmpDir ${path}/${i}_STAR --outSAMunmapped Within \
+   --outFilterType BySJout --outFilterMultimapNmax 20 --outFilterMismatchNmax 999 \
+   --outFilterMismatchNoverLmax 0.04 --alignIntronMin 20 --alignIntronMax 1000000 \
+   --alignMatesGapMax 1000000 --alignSJoverhangMin 8 --alignSJDBoverhangMin 1 --sjdbScore 1 \
+   --outSAMtype BAM Unsorted --quantMode TranscriptomeSAM \
+   --sjdbGTFfile ${path}/mm10_ERCC_ref.gtf --sjdbGTFfeatureExon exon \
+   --outFileNamePrefix ${path}/${i}_run2_
+done
+```
+
+## Removing duplicates and filtering for minimum mapping quality of 10
+```{bash}
+#Sort using samtools
+for i in $sample
+do
+samtools sort  -@ 24 -o ${path}/${i}_run1_sorted.bam ${path}/${i}_run1_Aligned.out.bam
+samtools sort  -@ 24 -o ${path}/${i}_run2_sorted.bam ${path}/${i}_run2_Aligned.out.bam
+done
+
+#Remove duplicates using Picard
+#Obtained refFlat file from "https://hgdownload.soe.ucsc.edu/goldenPath/mm10/database/refFlat.txt.gz"
+for i in $sample
+do
+   java -jar /usr/local/apps/picard/2.20.8/picard.jar  CollectRnaSeqMetrics \
+   REF_FLAT=${path}/mm10_refFlat.txt \
+   INPUT=${path}/${i}_run1_sorted.bam \
+   OUTPUT=${path}/${i}_run1_RnaSeqMetrics.txt \
+   STRAND=NONE
+   
+   java -jar /usr/local/apps/picard/2.20.8/picard.jar  CollectRnaSeqMetrics \
+   REF_FLAT=${path}/mm10_refFlat.txt \
+   INPUT=${path}/${i}_run2_sorted.bam \
+   OUTPUT=${path}/${i}_run2_RnaSeqMetrics.txt \
+   STRAND=NONE 
+
+#remove duplicates
+#run1
+   java -jar /usr/local/apps/picard/2.20.8/picard.jar  MarkDuplicates \
+   INPUT=${path}/${i}_run1_sorted.bam \
+   OUTPUT=${path}/${i}_run1_Aligned.out.MKDUP.bam \
+   METRICS_FILE=${path}/${i}_run1_RnaSeqMetrics.txt ASSUME_SORTED=true \
+   MAX_FILE_HANDLES_FOR_READ_ENDS_MAP=1000    REMOVE_DUPLICATES=true \
+   REMOVE_SEQUENCING_DUPLICATES=true
+#run2
+   java -jar /usr/local/apps/picard/2.20.8/picard.jar  MarkDuplicates \
+   INPUT=${path}/${i}_run2_sorted.bam \
+   OUTPUT=${path}/${i}_run2_Aligned.out.MKDUP.bam  \
+   METRICS_FILE=${path}/${i}_run2_RnaSeqMetrics.txt ASSUME_SORTED=true \
+   MAX_FILE_HANDLES_FOR_READ_ENDS_MAP=1000    REMOVE_DUPLICATES=true \
+   REMOVE_SEQUENCING_DUPLICATES=true 
+done
+
+#Filter bam files for minimum quality of 10
+for i in $sample
+do
+#run1
+  samtools view -@ 12 -b -f 2 -q 10 ${path}/${i}_run1_Aligned.out.MKDUP.bam | \
+  samtools view -@ 12 -b  >| ${path}/${i}_run1_filtered.bam
+  
+#run2
+  samtools view -@ 12 -b -f 2 -q 10 ${path}/${i}_run2_Aligned.out.MKDUP.bam | \
+  samtools view -@ 12 -b  >| ${path}/${i}_run2_filtered.bam
+done
+
+#Info
+for i in $sample
+do
+#run1
+  samtools flagstat ${path}/${i}_run1_filtered.bam > ${path}/${i}_run1_flagstat.txt
+  samtools idxstats ${path}/${i}_run1_filtered.bam > ${path}/${i}_run1_idxstat.txt
+#run2
+  samtools flagstat ${path}/${i}_run2_filtered.bam > ${path}/${i}_run2_flagstat.txt
+  samtools idxstats ${path}/${i}_run2_filtered.bam > ${path}/${i}_run2_idxstat.txt
+done
+```
+
+
+# Merge run 1 and run 2 bam files
+```{bash}
+for i in $sample
+do
+samtools merge ${path}/${i}_merged.bam ${path}/${i}_run?_filtered.bam
+done
+```
+
+
+# Generating bigWig files for browser tracks
+```{bash}
+#Index merged bam files
+for i in $sample
+do
+  samtools index ${path}/${i}_merged.bam ${path}/${i}_merged_index.bam.bai
+done
+
+#Generating bigwig files
+for i in $sample
+do
+  bamCoverage -b ${path}/${i}_merged.bam -o ${path}/${i}_merged.bw -of bigwig \
+  --normalizeUsing RPKM 
+done
+```
+
+
+# Generating gene and ERCC counts
+```{r}
+RNAseq_bam <-list.files("/path",pattern="*_merged.bam$", full.name=T)
+RNAseq_bam <- mixedsort(RNAseq_bam)
+
+#Feature counts
+features <- featureCounts(files=RNAseq_bam,
+        annot.ext="/path/mm10_ERCC_ref.gtf",
+        isGTFAnnotationFile = TRUE,
+        GTF.featureType = "exon",
+        GTF.attrType = "gene_id",
+        nthreads=12,
+        isPairedEnd = T,checkFragLength = T,requireBothEndsMapped = T)
+
+#Gene length
+genes_len=features$annotation[,c("GeneID","Length")]
+genes_len$geneLengthsInKB <- (genes_len$Length/1000)
+
+#Obtaining counts
+counts <- features$counts
+sample_name <- colnames(counts)
+colnames(counts) <- sample_name
+counts <- counts[rowSums(counts) > 1, ]
+counts <- tibble::rownames_to_column(as.data.frame(counts), var = "geneID")
+outDir <- "/path"
+write.table(counts,paste0(outDir,"/gene_counttable.xls"),col.names=T,row.names=F,quote=F,sep="\t")
+```
+
+
+# DESeq2 analysis
+```{r}
+ERCC_RNA_seq <- counts
+rownames(ERCC_RNA_seq)=ERCC_RNA_seq$geneID
+ERCC_RNA_seq=ERCC_RNA_seq[,-1]
+
+#Select columns for different time points
+colnames(ERCC_RNA_seq_df_1)
+ERCC_RNA_seq_48h<-ERCC_RNA_seq_df_1[,c("O_3_48","O_2_48","O_1_48","Y_3_48","Y_2_48","Y_1_48")]
+ERCC_RNA_seq_72h<-ERCC_RNA_seq_df_1[,c("O_3_72","O_2_72","O_1_72","Y_3_72","Y_2_72","Y_1_72")]
+ERCC_RNA_seq_96h<-ERCC_RNA_seq_df_1[,c("O_3_96","O_2_96","O_1_96","Y_3_96","Y_2_96","Y_1_96")]
+ERCC_RNA_seq_120h<-ERCC_RNA_seq_df_1[,c("O_3_120","O_2_120","O_1_120","Y_3_120","Y_2_120","Y_1_120")]
+ERCC_RNA_seq_240h<-ERCC_RNA_seq_df_1[,c("O_3_240","O_2_240","O_1_240","Y_3_240","Y_2_240","Y_1_240")]
+ERCC_RNA_seq_bef<-ERCC_RNA_seq_df_1[,c("O_3_bef","O_2_bef","O_1_bef","Y_3_bef","Y_2_bef","Y_1_bef")]
+
+#Condition variables 
+condition <- rep(c("old","young"),each=3)
+condition <- factor(condition,levels = c("young","old"))
+
+#Combine column data with count data
+coldata_48h<-data.frame(colnames(ERCC_RNA_seq_48h),condition)
+coldata_72h<-data.frame(colnames(ERCC_RNA_seq_72h),condition)
+coldata_96h<-data.frame(colnames(ERCC_RNA_seq_96h),condition)
+coldata_120h<-data.frame(colnames(ERCC_RNA_seq_120h),condition)
+coldata_240h<-data.frame(colnames(ERCC_RNA_seq_240h),condition)
+coldata_bef<-data.frame(colnames(ERCC_RNA_seq_bef),condition)
+
+#Import to DEseq2
+#Code was ran for each time-point mentioned above
+dds_bef<-DESeqDataSetFromMatrix(countData = ERCC_RNA_seq_bef,
+                                colData = coldata_bef,
+                                design = ~condition)
+
+dds_bef <- estimateSizeFactors(dds_bef)
+sizeFactors(dds_bef)
+normalizationFactors(dds_bef)
+
+#Run DEseq2
+dds_bef <- DESeq(dds_bef)
+res_bef <- results(dds_bef)
+head(res_bef)
+```
+
+
+## GO of differentially expressed genes (DAVID)
+```{bash}
+##GO terms for biological processes (txt files) were obtained from DAVID v6.8
+#old 
+go_bef_old %>%
+  arrange(PValue) %>%
+  filter(PValue < PValue[11]) %>%
+  mutate(Term=reorder(Term,Fold.Enrichment)) %>% 
+  ggplot(aes(x= Fold.Enrichment,y = Term,size = Count,color=-log10(PValue)))+
+  geom_point(alpha=0.5)+
+  scale_color_gradient(low = 'blue',high = 'red')+
+  theme_bw()+
+  ggtitle('GO Enrichment of old bef')
+  
+#young
+go_bef_young %>%
+  arrange(PValue) %>%
+  filter(PValue < PValue[11]) %>%
+  mutate(Term=reorder(Term,Fold.Enrichment)) %>% 
+  ggplot(aes(x= Fold.Enrichment,y = Term,size = Count,color=-log10(PValue)))+
+  geom_point(alpha=0.5)+
+  scale_color_gradient(low = 'blue',high = 'red')+
+  theme_bw()+
+  ggtitle('GO Enrichment of young bef')
+```
+
+
+# ImpulseDE2 analysis
+```{r}
+#geneID to rownames
+countData <- counts
+rownames(countData)=countData$geneID
+countData=countData[,-1]
+```
+
+## young vs old
+```{r}
+#ImpulseDE2 requires condition be case or control (old = control; young = case)
+Condition_young <- c("control","control","control","control","control","control",
+                     "control","control","control","control","control","control",
+                     "control","control","control","control","control","control",
+                     "case","case","case","case","case","case","case","case","case",
+                     "case","case","case","case","case","case","case","case","case")
+
+#Creating colData_young with time and condition and making time numeric
+colData_young_young <- as.data.frame(cbind(colnames(countData),Time,Condition_young))
+names(colData_young)[names(colData_young) == "V1"] <- "Sample"
+names(colData_rev)[names(colData_rev) == "Condition_rev"] <- "Condition"
+colData_young$Time <- as.numeric(colData_young$Time)
+
+#CountData is all numeric
+mutate_if(countData, is.factor, ~ as.numeric(levels(.x))[.x])
+
+#Running ImpulseDE2
+objectImpulseDE2_young <- runImpulseDE2(
+  matCountData    = countData, 
+  dfAnnotation    = colData_young,
+  boolCaseCtrl    = TRUE,
+  boolIdentifyTransients = TRUE,
+  vecConfounders  = NULL,
+  scaQThres       = 0.05,
+  scaNProc        = 1)
+
+#Creating Heatmap of results
+lsHeatmaps_young <- plotHeatmap(
+  objectImpulseDE2       = objectImpulseDE2_young,
+  strCondition           = "case",
+  boolIdentifyTransients = TRUE,
+  scaQThres              = 0.05)
+draw(lsHeatmaps_young$complexHeatmapFit)
+```
+
+### GO analysis
+```{bash}
+#GO terms for biological processes (txt files) were obtained from DAVID v6.8
+#transiently upregulated genes
+up_GO <- read.delim("/path/young_transient_upGO.txt")
+#transiently downregulated genes
+down_GO <- read.delim("/path/young_transient_downGO.txt")
+
+#Transiently upregulated GO plot
+young_up_GO %>%
+  arrange(PValue) %>%
+  filter(PValue < PValue[11]) %>%
+  mutate(Term=reorder(Term,Fold.Enrichment)) %>%
+  ggplot(aes(x=Fold.Enrichment,y= Term, size = Count, color = -log10(PValue))) +
+  geom_point(alpha=0.5)+
+  scale_color_gradient(low= 'blue',high='red')+
+  theme_bw()+
+  ggtitle('Transiently UP genes in young')
+  
+#Transiently downregulated GO plot
+young_down_GO %>%
+  arrange(PValue) %>%
+  filter(PValue < PValue[11]) %>%
+  mutate(Term=reorder(Term,Fold.Enrichment)) %>%
+  ggplot(aes(x=Fold.Enrichment,y= Term, size = Count, color = -log10(PValue))) +
+  geom_point(alpha=0.5)+
+  scale_color_gradient(low= 'blue',high='red')+
+  theme_bw()+
+  ggtitle('Transiently down genes in young')
+```

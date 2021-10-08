@@ -1,0 +1,259 @@
+***
+# Introduction
+**Scripts used to process and analyze ChIP-seq data; Yang et al**
+
+## Packages
+```{bash}
+trimgalore/0.6.6
+fastqc/0.11.9
+bowtie/2-2.4.2
+samtools/1.9
+picard/2.23.7
+sambamba/0.7.1
+gcc/7.4.0
+bedtools/2.30.0
+samtools/1.13
+deeptools/3.5.0
+peakranger/1.18
+```
+
+### R packages
+```{r}
+library(DiffBind) #/3.2.6
+```
+
+## Sample names
+```{bash}
+sample='Y1_liver_H3K27me3 Y1_liver_H3 Y2_liver_H3K27me3 Y2_liver_H3 
+Y3_liver_H3K27me3 Y3_liver_H3 O1_liver_H3K27me3 O1_liver_H3 O2_liver_H3K27me3 
+O2_liver_H3 O3_liver_H3K27me3 O3_liver_H3 Y1_kidney_H3K27me3 Y1_kidney_H3 
+Y2_kidney_H3K27me3 Y2_kidney_H3 Y3_kidney_H3K27me3 Y3_kidney_H3 Y4_kidney_H3K27me3 
+Y4_kidney_H3 O1_kidney_H3K27me3 O1_kidney_H3 O2_kidney_H3K27me3 O2_kidney_H3 
+O3_kidney_H3K27me3 O3_kidney_H3 O4_kidney_H3K27me3 O4_kidney_H3'
+```
+
+## Project path
+```{bash}
+path="/path"
+```
+
+
+# Data pre-processing
+## Adapter trimming
+```{bash}
+for i in $sample
+do
+  trim_galore --paired ${path}/${i}_R1.fastq.gz ${path}/${i}_R2.fastq.gz \
+  -o ${path}/
+done
+```
+
+## Performing FastQC on adapter trimmed FastQs
+```{bash}
+for i in $sample
+do
+  fastqc -f fastq -o ${path}/ ${path}/${i}_R?_val_?.fq.gz
+done
+```
+
+
+# Genome alignment 
+```{bash}
+#Directing Bowtie2 to the genome build (mm10)
+export BOWTIE2_INDEXES=/fdb/igenomes/Mus_musculus/UCSC/mm10/Sequence/Bowtie2Index/
+
+for i in $sample
+do
+#Performing alignment 
+  bowtie2 -p 24 --end-to-end --very-sensitive --no-mixed --no-discordant --phred33 \
+  --threads=$SLURM_CPUS_PER_TASK -I 10 -X 700 -x genome \
+  -1 ${path}/${i}_R1_val_1.fq.gz \
+  -2 ${path}/${i}_R2_val_2.fq.gz \
+  -S ${path}/${i}.sam &> \
+  ${path}/${i}_bowtie2.txt
+
+#generating filtered bam files
+  samtools view -@ 24 -h -F 4 -q 10 -bS ${path}/${i}.sam > \
+  ${path}/${i}_filtered.bam
+done
+```
+
+## Filtering for uniquely mapped reads
+```{bash}
+for i in $sample
+do 
+#Sorting filtered bam
+  java -jar $PICARDJARPATH/picard.jar SortSam -I ${path}/${i}_filtered.bam \
+  -O ${path}/${i}_filtered_sorted.bam -SORT_ORDER coordinate
+  
+#Filtering for uniquely mapped reads
+  sambamba view -h -t 2 -f bam -F "[XS] == null and not unmapped and not duplicate" \
+  ${path}/${i}_filtered_sorted.bam > \
+  ${path}/${i}_sorted_unique.bam
+  
+#Marking and removing duplicates with Picard
+  java -jar $PICARDJARPATH/picard.jar MarkDuplicates I=${path}/${i}_filtered_sorted_unique.bam \
+  O=${path}/${i}_filtered_noDUP_unique.bam REMOVE_DUPLICATES=true \
+  METRICS_FILE=${path}/${i}_filtered_noDUP.txt
+done
+```
+
+## Removing ENCODE Blacklisted regions
+```{bash}
+#Encode mm10 blacklist bed file
+wget -O ${path}/ENCFF547MET.bed.gz \
+https://www.encodeproject.org/files/ENCFF547MET/@@download/ENCFF547MET.bed.gz
+gunzip ${path}/ENCFF547MET.bed.gz
+
+#Removing regions that intersect with ENCODE blacklisted regions
+for i in $sample
+do
+  bedtools intersect -a ${path}/${i}_filtered_noDUP_unique.bam \
+  -b ${path}/ENCFF547MET.bed -v > \
+  ${path}/${i}_filtered_noDUP_unique.noB_unique.bam
+done
+```
+
+
+# Generating bigWig files for browser tracks
+```{bash}
+#Index bam files
+for i in $sample
+do
+  samtools index ${path}/${i}_filtered_noDUP_unique.noB_unique.bam
+done
+
+#Generating bigWig files
+for i in $sample
+do
+  bamCoverage -b ${path}/${i}_filtered_noDUP_unique.noB_unique.bam \
+  -o ${path}/${i}_filtered_noDUP_unique.noB_unique.bw -of bigwig \
+  --normalizeUsing RPKM -p $SLURM_CPUS_PER_TASK
+done
+```
+
+## H3/Input subtraction
+```{bash}
+#subtract H3 from H3K27me3 for Y1 kidney
+bigwigCompare -b1 ${path}/Y1_kidney_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/Y1_kidney_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/Y1_kidney_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for Y2 kidney
+bigwigCompare -b1 ${path}/Y2_kidney_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/Y2_kidney_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/Y2_kidney_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for Y3 kidney
+bigwigCompare -b1 ${path}/Y3_kidney_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/Y3_kidney_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/Y3_kidney_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for Y4 kidney
+bigwigCompare -b1 ${path}/Y4_kidney_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/Y4_kidney_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/Y4_kidney_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for O1 kidney
+bigwigCompare -b1 ${path}/O1_kidney_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/O1_kidney_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/O1_kidney_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for O2 kidney
+bigwigCompare -b1 ${path}/O2_kidney_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/O2_kidney_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/O2_kidney_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for O3 kidney
+bigwigCompare -b1 ${path}/O3_kidney_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/O3_kidney_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/O3_kidney_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for O4 kidney
+bigwigCompare -b1 ${path}/O4_kidney_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/O4_kidney_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/O4_kidney_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for Y1 liver
+bigwigCompare -b1 ${path}/Y1_liver_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/Y1_liver_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/Y1_liver_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for Y2 liver
+bigwigCompare -b1 ${path}/Y2_liver_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/Y2_liver_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/Y2_liver_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for Y3 liver
+bigwigCompare -b1 ${path}/Y3_liver_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/Y3_liver_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/Y3_liver_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for Y4 liver
+bigwigCompare -b1 ${path}/Y4_liver_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/Y4_liver_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/Y4_liver_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for O1 liver
+bigwigCompare -b1 ${path}/O1_liver_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/O1_liver_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/O1_liver_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for O2 liver
+bigwigCompare -b1 ${path}/O2_liver_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/O2_liver_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/O2_liver_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for O3 liver
+bigwigCompare -b1 ${path}/O3_liver_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/O3_liver_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/O3_liver_H3K27me3-H3-unique.bw -of bigwig
+
+#subtract H3 from H3K27me3 for O4 liver
+bigwigCompare -b1 ${path}/O4_liver_H3K27me3_filtered_noDUP_unique.noB_unique.bw \
+-b2 ${path}/O4_liver_H3_filtered_noDUP_unique.noB_unique.bw --operation subtract \
+-o ${path}/O4_liver_H3K27me3-H3-unique.bw -of bigwig
+```
+
+
+# Peak calling (broad)
+## Histone
+```{bash}
+histone='Y1_liver Y2_liver Y3_liver O1_liver O2_liver O3_liver'
+for i in $histone
+do
+  peakranger bcp -d ${path}/${i}_H3K27me3_filtered_noDUP_unique.noB_unique.bam \
+  -c ${path}/${i}_H3_filtered_noDUP_unique.noB_unique.bam \
+  -o ${path}/${i}_H3K27me3.bcp --report --gene_annot_file ${path}/peakranger/mm10_refGene.txt \
+  --plot_region 10000 --format bam
+done
+```
+
+
+# Identifying differentially enriched regions
+```{r}
+#DiffBind
+#Peaksets
+#Prepared sample sheet according to DiffBind's vignette (Stark & Brown) 
+#using peaksets obtained from peakranger and bam files
+samples <- read.csv("/path/H3K27me3_SampleSheet.csv")
+
+#Creating a DBA object
+DBdata <- dba(sampleSheet=samples)
+
+#Calculate binding matrix/counting reads
+DBdata_count <- dba.count(DBdata, bParallel=FALSE, summits=1000)
+
+#Data normalization
+#Data is normalized by sequencing depth (default)
+DBdata_norm <- dba.normalize(DBdata_count, method=DBA_DESEQ2)
+
+#Establishing a model design and contrast
+DBdata_cont <- dba.contrast(DBdata_norm, minMembers = 3,
+                            reorderMeta=list(Condition="Young"))
+
+#Performing differential analysis
+#default (DESeq2 analysis, FDR <0.05)
+DBdata_analyze <- dba.analyze(DBdata_cont)
+```
+

@@ -1,0 +1,215 @@
+***
+# Introduction
+**Scripts used to process and analyze salt fractionation data; Yang et al**
+
+## Packages
+```{bash}
+cutadapt/3.0
+fastqc/0.11.9
+bowtie/2-2.4.2
+samtools/1.13
+picard/2.23.7
+sambamba/0.7.1
+gcc/7.4.0
+bedtools/2.30.0
+deeptools/3.5.1
+```
+
+## Sample names
+```{bash}
+sample='Y1_Nuc Y1_Input Y1_67 Y1_150 Y1_250 Y1_350 Y1_Pellet Y2_Nuc Y2_Input Y2_67 Y2_150 Y2_250 Y2_350 Y2_Pellet O1_Nuc O1_Input O1_67 O1_150 O1_250 O1_350 O1_Pellet O2_Nuc O2_Input O2_67 O2_150 O2_250 O2_350 O2_Pellet'
+```
+
+## Project path
+```{bash}
+path="/path"
+```
+
+# Data pre-processing
+## Adapter trimming
+```{bash}
+#Adapter trimming (NEBNext adapter sequences)
+for i in $sample
+do
+  cutadapt -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC \
+  -A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT \
+  -o ${path}/${i}_R1_val_1.fq -p ${path}/${i}_R2_val_2.fq \
+  ${path}/${i}_R1.fastq ${path}/${i}_R2.fastq
+done
+```
+
+## Performing FastQC on adapter trimmed FastQs
+```{bash}
+for i in $sample
+do
+  fastqc -f fastq -o ${path}/ ${path}/${i}_R?_val_?.fq
+done
+```
+
+
+# Genome alignment 
+```{bash}
+#Directing Bowtie2 to the genome build (mm10)
+export BOWTIE2_INDEXES=/fdb/igenomes/Mus_musculus/UCSC/mm10/Sequence/Bowtie2Index/
+
+for i in $sample
+do
+#Performing alignment 
+  bowtie2 -p 24 --end-to-end --very-sensitive --no-mixed --no-discordant --phred33 \
+  -I 10 -X 700 -x genome -1 ${path}/${i}_R1_val_1.fq -2 ${path}/${i}_R2_val_2.fq \
+  -S ${path}/${i}.sam &> ${path}/${i}_bowtie2.txt
+
+#Generating filtered bam files
+  samtools view -@ 24 -h -F 4 -q 10 -bS ${path}/${i}.sam > ${path}/${i}_filtered.bam
+done
+```
+
+## Filtering for uniquely mapped reads
+```{bash}
+for i in $sample
+do 
+#Sorting
+  java -jar $PICARDJARPATH/picard.jar SortSam -I $i -O ${path}/${i}_sorted.bam -SORT_ORDER coordinate
+
+#Retaining uniquely mapped and not duplicate reads 
+  sambamba view -h -t 2 -f bam -F "[XS] == null and not unmapped and not duplicate" \
+  ${path}/${i}_sorted.bam > ${path}/${i}_sorted_unique.bam
+
+#Filtering out duplicates
+  java -jar $PICARDJARPATH/picard.jar MarkDuplicates I=${path}/${i}_sorted_unique.bam \
+  O=${path}/${i}_noDUP_unique.bam REMOVE_DUPLICATES=true METRICS_FILE=${path}/${i}_noDUP.txt
+done
+```
+
+## Removing ENCODE Blacklisted regions
+```{bash}
+#Encode mm10 blacklist bed file
+wget -O ${path}/ENCFF547MET.bed.gz \
+https://www.encodeproject.org/files/ENCFF547MET/@@download/ENCFF547MET.bed.gz
+gunzip ${path}/ENCFF547MET.bed.gz
+
+#Removing regions that intersect with ENCODE blacklisted regions
+for i in $sample
+do
+  bedtools intersect -a ${path}/${i}_noDUP_unique.bam \
+  -b ${path}/ENCFF547MET.bed -v > \
+  ${path}/${i}_noB_unique.bam
+done
+```
+
+
+# Generating bigWig files for browser tracks
+```{bash}
+#Index bam files
+for i in $sample
+do
+  samtools index ${path}/${i}_noB_unique.bam
+done
+
+#Generating bigWig files
+for i in $sample
+do
+  bamCoverage -b ${path}/${i}.bam \
+  -o ${path}/${i}.bw -of bigwig --normalizeUsing RPKM 
+done
+```
+
+
+# Input subtraction
+```{bash}
+#subtract Input from Nuc for Y1
+bigwigCompare -b1 ${path}/Y1_Nuc.bw -b2 ${path}/Y1_Input.bw --operation subtract \
+-o ${path}/Y1_Nuc-Input.bw -of bigwig
+
+#subtract Input from 67 for Y1
+bigwigCompare -b1 ${path}/Y1_67.bw -b2 ${path}/Y1_Input.bw --operation subtract \
+-o  ${path}/Y1_67-Input.bw -of bigwig
+
+#subtract Input from 150 for Y1
+bigwigCompare -b1 ${path}/Y1_150.bw -b2 ${path}/Y1_Input.bw --operation subtract \
+-o ${path}/Y1_150-Input.bw -of bigwig
+
+#subtract Input from 250 for Y1
+bigwigCompare -b1 ${path}/Y1_250.bw -b2 ${path}/Y1_Input.bw --operation subtract \
+-o ${path}/Y1_250-Input.bw -of bigwig
+
+#subtract Input from 350 for Y1
+bigwigCompare -b1 ${path}/Y1_350.bw -b2 ${path}/Y1_Input.bw --operation subtract \
+-o ${path}/Y1_350-Input.bw -of bigwig
+
+#subtract Input from Pellet for Y1
+bigwigCompare -b1 ${path}/Y1_Pellet.bw -b2 ${path}/Y1_Input.bw --operation subtract \
+-o ${path}/Y1_Pellet-Input.bw -of bigwig
+
+#subtract Input from Nuc for O1
+bigwigCompare -b1 ${path}/O1_Nuc.bw -b2 ${path}/O1_Input.bw --operation subtract \
+-o ${path}/O1_Nuc-Input.bw -of bigwig
+
+#subtract Input from 67 for O1
+bigwigCompare -b1 ${path}/O1_67.bw -b2 ${path}/O1_Input.bw --operation subtract \
+-o ${path}/O1_67-Input.bw -of bigwig
+
+#subtract Input from 150 for O1
+bigwigCompare -b1 ${path}/O1_150.bw -b2 ${path}/O1_Input.bw --operation subtract \
+-o ${path}/O1_150-Input.bw -of bigwig
+
+#subtract Input from 250 for O1
+bigwigCompare -b1 ${path}/O1_250.bw -b2 ${path}/O1_Input.bw --operation subtract \
+-o ${path}/O1_250-Input.bw -of bigwig
+
+#subtract Input from 350 for O1
+bigwigCompare -b1 ${path}/O1_350.bw -b2 ${path}/O1_Input.bw --operation subtract \
+-o ${path}/O1_350-Input.bw -of bigwig
+
+#subtract Input from Pellet for O1
+bigwigCompare -b1 ${path}/O1_Pellet.bw -b2 ${path}/O1_Input.bw --operation subtract \
+-o ${path}/O1_Pellet-Input.bw -of bigwig
+
+#subtract Input from Nuc for Y2
+bigwigCompare -b1 ${path}/Y2_Nuc.bw -b2 ${path}/Y2_Input.bw --operation subtract \
+-o ${path}/Y2_Nuc-Input.bw -of bigwig
+
+#subtract Input from 67 for Y2
+bigwigCompare -b1 ${path}/Y2_67.bw -b2 ${path}/Y2_Input.bw --operation subtract \
+-o ${path}/Y2_67-Input.bw -of bigwig
+
+#subtract Input from 150 for Y2
+bigwigCompare -b1 ${path}/Y2_150.bw -b2 ${path}/Y2_Input.bw --operation subtract \
+-o ${path}/Y2_150-Input.bw -of bigwig
+
+#subtract Input from 250 for Y2
+bigwigCompare -b1 ${path}/Y2_250.bw -b2 ${path}/Y2_Input.bw --operation subtract \
+-o ${path}/Y2_250-Input.bw -of bigwig
+
+#subtract Input from 350 for Y2
+bigwigCompare -b1 ${path}/Y2_350.bw -b2 ${path}/Y2_Input.bw --operation subtract \
+-o ${path}/Y2_350-Input.bw -of bigwig
+
+#subtract Input from Pellet for Y2
+bigwigCompare -b1 ${path}/Y2_Pellet.bw -b2 ${path}/Y2_Input.bw --operation subtract \
+-o ${path}/Y2_Pellet-Input.bw -of bigwig
+
+#subtract Input from Nuc for O2
+bigwigCompare -b1 ${path}/O2_Nuc.bw -b2 ${path}/O2_Input.bw --operation subtract \
+-o ${path}/O2_Nuc-Input.bw -of bigwig
+
+#subtract Input from 67 for O2
+bigwigCompare -b1 ${path}/O2_67.bw -b2 ${path}/O2_Input.bw --operation subtract \
+-o ${path}/O2_67-Input.bw -of bigwig
+
+#subtract Input from 150 for O2
+bigwigCompare -b1 ${path}/O2_150.bw -b2 ${path}/O2_Input.bw --operation subtract \
+-o ${path}/O2_150-Input.bw -of bigwig
+
+#subtract Input from 250 for O2
+bigwigCompare -b1 ${path}/O2_250.bw -b2 ${path}/O2_Input.bw --operation subtract \
+-o ${path}/O2_250-Input.bw -of bigwig
+
+#subtract Input from 350 for O2
+bigwigCompare -b1 ${path}/O2_350.bw -b2 ${path}/O2_Input.bw --operation subtract \
+-o ${path}/O2_350-Input.bw -of bigwig
+
+#subtract Input from Pellet for O2
+bigwigCompare -b1 ${path}/O2_Pellet.bw -b2 ${path}/O2_Input.bw --operation subtract \
+-o ${path}/O2_Pellet-Input.bw -of bigwig
+```

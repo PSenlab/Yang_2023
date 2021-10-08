@@ -1,0 +1,144 @@
+***
+# Introduction
+**Scripts used to process and analyze CUT&Tag data; Yang et al**
+
+## Packages
+```{bash}
+bowtie/2-2.4.2
+samtools/1.9
+bedtools/2.30.0
+deeptools/3.5.0
+picard/2.23.7
+deeptools/3.5.0
+diffReps/1.55.6
+```
+
+## Sample names
+```{bash}
+sample='human_H3K27me3_1 human_H3K27me3_2 human_H3K27me3_3 human_H3K27me3_4 human_H3K27me3_5 human_H3K27me3_6 human_H3K27me3_7 human_H3K27me3_8'
+```
+
+## Project path
+```{bash}
+path="/path"
+```
+
+
+# Data pre-processing
+## Performing FastQC on adapter trimmed FastQs
+```{bash}
+for i in $sample
+do
+  fastqc -f fastq -o ${path}/ ${path}/${i}_R?.fq.gz
+done
+```
+
+
+# Genome alignment (hg38)
+```{bash}
+#Directing Bowtie2 to the human genome build (hg38)
+export BOWTIE2_INDEXES=/fdb/igenomes/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/
+
+for i in $sample
+do
+#Performing alignment
+  bowtie2 --end-to-end --very-sensitive --no-mixed --no-discordant --phred33 \
+  -I 10 -X 700 -x genome -1 ${path}/${i}_R1.fastq.gz \
+  -2 ${path}/${i}_R2.fastq.gz -S ${path}/${i}.sam &> \
+  ${path}/${i}.txt
+  
+#Generating filtered bam files
+  samtools view -@ 24 -h -q 2 -bS ${path}/${i}.sam > ${path}/${i}_filtered.bam
+done
+```
+
+## Removing ENCODE Blacklisted regions
+```{bash}
+#Encode hg38 blacklist bed file was obtained from "https://www.encodeproject.org/files/ENCFF356LFX/@@download/ENCFF356LFX.bed.gz"
+
+for i in $sample
+do
+  bedtools intersect -a ${path}/${i}_filtered.sorted.bam \
+  -b ${path}/ENCFF356LFX.bed -v > \
+  ${path}/${i}_filtered.sorted.nobl.bam
+done
+```
+
+# Genome alignment (Ecoli)
+```{bash}
+#Directing Bowtie2-build to the Ecoli reference
+export BOWTIE2_INDEXES=${path}/ecoli_reference/
+
+for i in $sample
+do
+#Performing alignment
+  bowtie2 --end-to-end --very-sensitive --no-mixed --no-discordant --phred33 \
+  -I 10 -X 700 -x ecoli_k12 -1 ${path}/${i}_R1.fastq.gz \
+  -2 ${path}/${i}_R2.fastq.gz -S ${path}/${i}_spikeIn.sam &> \
+  ${path}/${i}_spikeIn.txt 
+
+#spike-in sequencing depth
+  seqDepthDouble=`samtools view -F 0x04 ${path}/${i}_spikeIn.sam | wc -l` \
+  seqDepth=$((seqDepthDouble/2))
+  echo $seqDepth >${path}/${i}_spikeIn.seqDepth
+done
+```
+
+## Assessing duplication rate
+```{bash}
+for i in $sample
+    do
+#Sorting sam file
+    java -Xmx4g -XX:ParallelGCThreads=6 -jar $PICARDJARPATH/picard.jar \
+    SortSam I=$i O=${path}/${i}.sorted.sam SORT_ORDER=coordinate 
+    
+#Marking duplicates but not removing
+    java -Xmx4g -XX:ParallelGCThreads=6 -jar $PICARDJARPATH/picard.jar MarkDuplicates \
+    I=${path}/${i}.sorted.sam O=${path}/${i}.sorted.rmDup.sam \
+    REMOVE_DUPLICATES=false METRICS_FILE=${path}/${i}_picard.rmDup.txt
+done
+```
+
+## Spike-in normalization
+```{bash}
+#sequencing depth
+seqDepth=${path}/*${i}_spikeIn.seqDepth
+
+for i in $seqDepth
+do
+    base_name=$(basename $i)
+    sample_name=${base_name%%_spikeIn*}
+    scale_factor=`echo "10000 /$(cat $i)" | bc -l`
+    
+#Generating RPKM normalized bigwig
+    bamCoverage --scaleFactor $scale_factor --normalizeUsing RPKM \
+    -b ${path}/${sample_name}_filtered.sorted.nobl.bam -o ${path}/${sample_name}_scaled_RPKM.bw
+done
+```
+
+### H3 subtraction
+```{bash}
+rep='1 2 3 4 5 6 7 8'
+
+for i in $rep 
+do
+#default binsize
+  bigwigCompare --operation subtract -o ${path}/Human_${i}_H3K27me3_scaled_RPKM_H3sub.bw \
+  -of bigwig -b1 ${path}/Human_H3K27me3_${i}_scaled_RPKM.bw -b2 ${path}/Human_H3_${i}_scaled_RPKM.bw
+done
+```
+
+
+# Identifying differentialy enriched sites
+```{bash}
+#Creating bed files
+bedtools bamtobed -i ${path}/${i}_filtered.sorted.nobl.bam -bedpe > \
+  ${path}/${i}.bed
+
+#Performing differential analysis with diffReps
+diffReps.pl -tr ${path}/human_H3K27me3_2.bed ${path}/human_H3K27me3_4.bed \
+${path}/human_H3K27me3_5.bed ${path}/human_H3K27me3_6.bed ${path}/human_H3K27me3_7.bed \
+-co ${path}/human_H3K27me3_1.bed ${path}/human_H3K27me3_3.bed ${path}/human_H3K27me3_8.bed \
+--chrlen ${path}/mm10_chrlen.txt -re ${path}/results.txt -me nb
+```
+
