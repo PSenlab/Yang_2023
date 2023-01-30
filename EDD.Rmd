@@ -1,0 +1,31 @@
+***
+#Introduction
+**Script used to call EDD(Enriched Domain Detector) on ChIP-seq data
+
+##Packages
+```{bash}
+edd/1.1.19
+ucsc
+```
+
+##Generate mm10 chrom sizes
+```{bash}
+fetchChromSizes mm10 > mm10.sizes
+```
+
+##Project path
+```{bash}
+OUTPUT="path to output"
+INPUT="path of input bam files"
+```
+
+##Run the command, collecting output in output directory
+##Make sure to configure the config file to adjust the required_fraction_of_informative_bins down (in this case 0.97)
+##gap penalty is automatically calculated
+```{bash}
+edd --bin-size 20 -p $SLURM_CPUS_PER_TASK -n 10000 mm10.sizes mm10-blacklist.bed --config-file EDD.config.txt --write-log-ratios --write-bin-scores $INPUT/O_H3K27me3_liver_merged.bam $INPUT/O_H3_liver_merged.bam $OUTPUT
+edd --bin-size 20 -p $SLURM_CPUS_PER_TASK -n 10000 mm10.sizes mm10-blacklist.bed --config-file EDD.config.txt --write-log-ratios --write-bin-scores $INPUT/O_H3K27me3_kidney_merged.bam $INPUT/O_H3_kidney_merged.bam $OUTPUT
+edd --bin-size 20 -p $SLURM_CPUS_PER_TASK -n 10000 mm10.sizes mm10-blacklist.bed --config-file EDD.config.txt --write-log-ratios --write-bin-scores $INPUT/24mo_H3K27me3_heart_merged.bam $INPUT/24mo_input_heart_merged.bam $OUTPUT
+edd --bin-size 20 -p $SLURM_CPUS_PER_TASK -n 10000 mm10.sizes mm10-blacklist.bed --config-file EDD.config.txt --write-log-ratios --write-bin-scores $INPUT/24mo_H3K27me3_quad_merged.bam $INPUT/24mo_Input_quad_merged.bam $OUTPUT
+```
+
