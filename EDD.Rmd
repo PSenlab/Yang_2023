@@ -1,6 +1,6 @@
 ***
 #Introduction
-**Script used to call EDD(Enriched Domain Detector) on ChIP-seq data
+**Script used to call EDD(Enriched Domain Detector) on ChIP-seq data;Yang et al**
 
 ##Packages
 ```{bash}
