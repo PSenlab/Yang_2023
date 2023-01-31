@@ -1,0 +1,47 @@
+***
+#Introduction
+**Script used to analysis nucleasome occupancy with DANPOS
+
+##package
+```{bash}
+DANPOS/3.1.1
+```
+
+##Project path
+```{bash}
+INPUT1="path of input bam files"
+INPUT2="path of dpos command output files"
+```
+
+##sample name
+```{bash}
+sample='Y O'
+```
+
+##Run DANPOS
+```{bash}
+#generate a list of nucleosome positions for each sample with fold-change normalization (read normalized)
+danpos.py dpos ${INPUT1}/O_input_merged.bam:Y_input_merged.bam -m 1 -o dpos_dynamic_merged
+
+#draw danpos profiles across genomic features (basic)
+danpos.py profile $INPUT2/Y_input_merged.Fnor.smooth.wig,$INPUT2/O_input_merged.Fnor.smooth.wig --genefile_paths $INPUT1/mm10_geneset --heatmap 1 --periodicity 1 --wigfile_aliases Y,O --name profile_genomic_features_basic
+
+#draw danpos profiles over regions in a bed file (in this case liver peaks from diffBind output)
+danpos.py profile $INPUT2/Y_input_merged.Fnor.smooth.wig,$INPUT2/O_input_merged.Fnor.smooth.wig --bed3file_paths $INPUT1/diffBind_H3K27me3_peaks.bed.txt --heatmap 1 --periodicity 1 --wigfile_aliases Y,O --name profile_diffBind
+
+#draw danpos profiles over regions in a bed file (in this case old-specific liver broad domains)
+danpos.py profile $INPUT2/Y_input_merged.Fnor.smooth.wig,$INPUT2/O_input_merged.Fnor.smooth.wig --bed3file_paths $INPUT1/EDD_domains_liver_old_specific_peaks_3column.bed --heatmap 1 --periodicity 1 --wigfile_aliases Y,O --name profile_old-specific_liver_broad_domains
+
+#draw danpos profiles over regions in a bed file (in this case old-specific liver broad domains wider profile)
+danpos.py profile $INPUT2/Y_input_merged.Fnor.smooth.wig,$INPUT2/O_input_merged.Fnor.smooth.wig --bed3file_paths $INPUT1/EDD_domains_liver_old_specific_peaks_3column.bed --heatmap 1 --periodicity 1 --region_size 1000000 --wigfile_aliases Y,O --name profile_old-specific_liver_broad_domains_wide
+
+#run statistical analysis for positions/peaks/regions (for whole genome)
+danpos.py stat $INPUT2/Y_input_merged.Fnor.smooth.positions,$INPUT2/O_input_merged.Fnor.smooth.positions Y,O --name stat_whole_genome
+
+#run statistical analysis for positions/peaks/regions (for diffBind regions)
+danpos.py stat $INPUT2/Y_diff_merged.Fnor.positions,$INPUT2/O_diff_merged.Fnor.positions Y,O --name stat_diffBind
+
+#run statistical analysis for positions/peaks/regions (for old-specific liver broad domains)
+danpos.py stat $INPUT2/Y_EDD_merged.Fnor.positions,$INPUT2/O_EDD_merged.Fnor.positions Y,O --name stat_old-specific_liver_broad_domains
+```
+
