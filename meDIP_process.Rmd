@@ -1,0 +1,142 @@
+***
+# Introduction
+**Scripts used to process and analyze MeDIP-seq data**
+
+## Packages
+```{bash}
+# Biowulf packages 
+trimgalore/0.6.6
+fastqc/0.11.9
+multiqc/1.9
+bowtie/2
+samtools/1.9
+picard/2.23.7
+bedtools/2.30.0
+deeptools/3.5.0
+macs/2.2.7.1
+```
+# Data Pre-processing
+```{bash}
+##== linux command ==##
+path="/path"
+#text file with the names of all the samples
+#Sample_names.txt
+```
+
+## Adapter trimming
+```{bash}
+##== linux command ==##
+mkdir -p ${path}/fastq/adapt_trim
+for Sample_names in $(cat Sample_names.txt)
+do
+  echo "fastq: " $Sample_names
+  trim_galore ${path}/fastq/${Sample_names}_R?.fastq.gz --illumina -o ${path}/fastq/adapt_trim/
+done
+```
+
+## FastQC on resulting adapter trimmed FastQ files
+```{bash}
+##== linux command ==##
+mkdir -p ${path}/fastq/adapt_trim/fastqc
+TMP=/lscratch/$SLURM_JOB_ID
+for Sample_names in $(cat Sample_names.txt)
+do
+  fastqc -o ${path}/fastq/adapt_trim/fastqc/ -d $TMP -t 12 --noextract \
+  -f fastq ${path}/fastq/adapt_trim/${Sample_names}_R?.fq.gz
+done
+```
+
+## MultiQC to summarize QC data
+```{bash}
+##== linux command ==##
+multiqc ${path}/fastq/adapt_trim/fastqc/ -n ${path}/fastq/adapt_trim/fastqc/multiqc_hMeDIP
+```
+
+# Genome Alignment
+## Bowtie2 alignment to mm10
+```{bash}
+##== linux command ==##
+mkdir -p ${path}/bam
+mkdir -p ${path}/bam/bowtie2_summary
+mkdir -p ${path}/bam/fragmentLen
+#mm10 bowtie2 index
+export BOWTIE2_INDEXES=/fdb/igenomes/Mus_musculus/UCSC/mm10/Sequence/Bowtie2Index/
+for Sample_names in $(cat Sample_names.txt)
+do
+  bowtie2 -p 24 --end-to-end --no-mixed --no-discordant --very-sensitive -I 10 -X 700 \
+  --phred33 -x genome -1 ${path}/fastq/adapt_trim/${Sample_names}_R1.fq.gz -2 ${path}/fastq/adapt_trim/${Sample_names}_R2.fq.gz \
+  -S ${path}/bam/${Sample_names}.sam &> ${path}/bam/bowtie2_summary/${Sample_names}_bowtie2.txt 
+done
+
+#Sorting, keeping only uniquely mapped reads, and removing duplicates
+```{bash}
+##== linux command ==##
+for Sample_names in $(cat Sample_names.txt)
+do 
+  sambamba sort -t 2 -o ${path}/bam/${Sample_names}_sorted.bam ${path}/bam/${Sample_names}_filtered.bam
+  sambamba view -h -t 2 -f bam -F "[XS] == null and not unmapped and not duplicate" \
+  ${path}/bam/${Sample_names}_sorted.bam > ${path}/bam/${Sample_names}_unique_noDUP.bam
+  
+  ##To remove filtered and sorted bam files
+  rm ${path}/bam/${Sample_names}_filtered.bam
+  rm ${path}/bam/${Sample_names}_sorted.bam
+done
+
+## Remove ENCODE blacklisted regions from Bam files
+```{bash}
+wget -O ${path}/bam/ENCFF547MET.bed.gz https://www.encodeproject.org/files/ENCFF547MET/@@download/ENCFF547MET.bed.gz
+gunzip ${path}/bam/ENCFF547MET.bed.gz
+BLACKR=${path}/bam/ENCFF547MET.bed
+for Sample_names in $(cat Sample_names.txt)
+do
+  bedtools intersect -a ${path}/bam/${Sample_names}_noDUP.bam -b $BLACKR -v > ${path}/bam/${Sample_names}_noDUP_B.bam
+  rm ${path}/bam/${Sample_names}_noDUP.bam 
+done
+```
+
+## Generate browser tracks
+# Index bam files
+```{bash}
+for Sample_names in $(cat Sample_names.txt)
+do
+  samtools index ${path}/bam/${Sample_names}_noDUP_B.bam
+done
+```
+
+# Generating bigwig files
+```{bash}
+mkdir -p ${path}/bigwig
+for MeDIP_names in $(cat MeDIP_names.txt)
+do
+  bamCoverage -b ${path}/bam/${MeDIP_names}_unique_noDUP_B.bam -o ${path}/bigwig/${MeDIP_names}_unique.bw -of bigwig \
+  --effectiveGenomeSize 1870000000 --extendReads 200 --normalizeUsing RPKM -p $SLURM_CPUS_PER_TASK
+done
+```
+
+# Performing input subtraction from bigwig files
+```{bash}
+mkdir -p ${path}/bigwig/InputSub
+OUTPUT1="${path}/bigwig/InputSub/"
+YOUNG_5mC=(${path}/bigwig/Y?_5mC*)
+YOUNG_INPUT=(${path}/bigwig/Y?_input*)
+OLD_5mC=(${path}/bigwig/O?_5mC*)
+OLD_INPUT=(${path}/bigwig/O?_input*)
+#Young 5mC and Input
+for i in $(seq 0 $((${#YOUNG_5mC[@]}-1)))
+do
+base=$(basename ${YOUNG_5mC[$i]})
+sample_name=${base%%.*}
+base1=$(basename ${YOUNG_INPUT[$i]})
+sample_name1=${base1%%.*}
+bigwigCompare -b1 ${YOUNG_5mC[$i]} -b2 ${YOUNG_INPUT[$i]} --operation subtract -o ${OUTPUT1}${sample_name}_sub_${sample_name1}.bw
+done
+#Old 5mC and Input
+for i in $(seq 0 $((${#OLD_5mC[@]}-1)))
+do
+base=$(basename ${OLD_5mC[$i]})
+sample_name=${base%%.*}
+base1=$(basename ${OLD_INPUT[$i]})
+sample_name1=${base1%%.*}
+bigwigCompare -b1 ${OLD_5mC[$i]} -b2 ${OLD_INPUT[$i]} --operation subtract -o ${OUTPUT1}${sample_name}_sub_${sample_name1}.bw
+done
+```
